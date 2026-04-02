@@ -4,6 +4,33 @@ import time
 from apollo_client import ApolloClient
 
 
+def preview_people_fields(
+    total_matches: int,
+    min_per_company: int,
+    max_per_company: int,
+) -> dict:
+    """How many people preview/enrich will count for one org (same rules as run_enrichment).
+
+    Enrichment caps the list at max_per_company and skips the org when fewer than
+    min_per_company matches. Preview uses Apollo's total count the same way.
+    """
+    raw = max(0, int(total_matches))
+    capped = min(raw, max_per_company)
+    if capped < min_per_company:
+        return {
+            "people_count_raw": raw,
+            "people_count_capped": capped,
+            "people_count": 0,
+            "skipped_below_min": True,
+        }
+    return {
+        "people_count_raw": raw,
+        "people_count_capped": capped,
+        "people_count": capped,
+        "skipped_below_min": False,
+    }
+
+
 def run_enrichment(
     apollo: ApolloClient,
     companies: list[str],

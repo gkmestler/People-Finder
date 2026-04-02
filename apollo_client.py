@@ -4,16 +4,15 @@ import time
 import requests
 
 API_BASE = "https://api.apollo.io"
-MCP_BASE = "https://mcp.apollo.io"
 
 
 class ApolloClient:
-    def __init__(self, api_key: str, oauth_token: str = None):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self.oauth_token = oauth_token
         self.headers = {
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
+            "Accept": "application/json",
             "X-Api-Key": api_key,
         }
 
@@ -29,26 +28,47 @@ class ApolloClient:
             raise Exception(f"{resp.status_code} {endpoint}: {detail}")
         return resp.json()
 
-    def _post_oauth(self, endpoint: str, payload: dict) -> dict:
-        """POST to Apollo API using OAuth token auth."""
-        if not self.oauth_token:
-            raise Exception("OAuth token required for people search. Please connect your Apollo account.")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.oauth_token}",
-        }
-        # Try API base first, fall back to MCP base
-        resp = requests.post(f"{API_BASE}{endpoint}", json=payload, headers=headers, timeout=30)
-        if resp.status_code == 403:
-            # Try MCP base as proxy
-            resp = requests.post(f"{MCP_BASE}{endpoint}", json=payload, headers=headers, timeout=30)
+    def _people_api_search(
+        self,
+        organization_ids: list[str],
+        titles: list[str],
+        page: int,
+        per_page: int,
+    ) -> dict:
+        """People API Search (master API key). Query params per Apollo docs — not mixed_people/search."""
+        url = f"{API_BASE}/api/v1/mixed_people/api_search"
+        params: list[tuple[str, str | int]] = []
+        for oid in organization_ids:
+            if oid:
+                params.append(("organization_ids[]", str(oid)))
+        for t in titles:
+            if t and str(t).strip():
+                params.append(("person_titles[]", str(t).strip()))
+        params.append(("page", int(page)))
+        safe_per = max(1, min(int(per_page), 100))
+        params.append(("per_page", safe_per))
+
+        resp = requests.post(url, headers=self.headers, params=params, timeout=45)
         if not resp.ok:
             try:
                 detail = resp.json()
             except Exception:
                 detail = resp.text[:200]
-            raise Exception(f"{resp.status_code} {endpoint}: {detail}")
+            raise Exception(f"{resp.status_code} /api/v1/mixed_people/api_search: {detail}")
         return resp.json()
+
+    @staticmethod
+    def _normalize_api_search_person(p: dict) -> dict:
+        org = p.get("organization") or {}
+        last = p.get("last_name") or p.get("last_name_obfuscated") or ""
+        return {
+            "id": p.get("id"),
+            "first_name": p.get("first_name") or "",
+            "last_name": last,
+            "title": (p.get("title") or "") or "",
+            "organization_name": org.get("name", ""),
+            "linkedin_url": p.get("linkedin_url"),
+        }
 
     def search_organizations(self, company_name: str) -> list[dict]:
         """Search Apollo for an organization by name. Returns list of org matches."""
@@ -79,31 +99,18 @@ class ApolloClient:
         page: int = 1,
         per_page: int = 25,
     ) -> dict:
-        """Search for people at specific orgs with matching titles. Uses OAuth."""
-        payload = {
-            "organization_ids": organization_ids,
-            "person_titles": titles,
-            "page": page,
-            "per_page": per_page,
-        }
-        data = self._post_oauth("/api/v1/mixed_people/search", payload)
-        people = data.get("people", [])
-        pagination = data.get("pagination", {})
+        """Search people at orgs by title via People API Search (mixed_people/api_search)."""
+        per = max(1, min(int(per_page), 100))
+        data = self._people_api_search(organization_ids, titles, page, per)
+        people_raw = data.get("people", []) or []
+        total = int(data.get("total_entries", 0) or 0)
+        total_pages = max(1, (total + per - 1) // per) if total else 1
+
         return {
-            "people": [
-                {
-                    "id": p.get("id"),
-                    "first_name": p.get("first_name"),
-                    "last_name": p.get("last_name"),
-                    "title": p.get("title"),
-                    "organization_name": (p.get("organization") or {}).get("name", ""),
-                    "linkedin_url": p.get("linkedin_url"),
-                }
-                for p in people
-            ],
-            "total": pagination.get("total_entries", 0),
-            "total_pages": pagination.get("total_pages", 1),
-            "page": pagination.get("page", page),
+            "people": [self._normalize_api_search_person(p) for p in people_raw],
+            "total": total,
+            "total_pages": total_pages,
+            "page": page,
         }
 
     def search_all_people(
@@ -119,8 +126,9 @@ class ApolloClient:
         for page in range(1, max_pages + 1):
             result = self.search_people(organization_ids, titles, page=page, per_page=100)
             for person in result["people"]:
-                if person["id"] not in seen_ids:
-                    seen_ids.add(person["id"])
+                pid = person.get("id")
+                if pid and pid not in seen_ids:
+                    seen_ids.add(pid)
                     all_people.append(person)
 
             if page >= result["total_pages"]:

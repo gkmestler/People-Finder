@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from apollo_client import ApolloClient
 from claude_client import expand_titles
-from enrichment import run_enrichment
+from enrichment import run_enrichment, preview_people_fields
 from excel_builder import build_spreadsheet
 import oauth
 
@@ -27,18 +27,20 @@ jobs = {}
 
 
 def get_apollo_client():
-    """Create an ApolloClient with API key + OAuth token if available."""
-    api_key = os.getenv("APOLLO_API_KEY")
+    """Create an ApolloClient (People API Search uses master API key only)."""
+    api_key = (os.getenv("APOLLO_API_KEY") or "").strip()
     if not api_key:
         raise Exception("APOLLO_API_KEY not set")
-    token = oauth.get_access_token()
-    return ApolloClient(api_key, oauth_token=token)
+    return ApolloClient(api_key)
+
+
+def apollo_api_configured() -> bool:
+    return bool((os.getenv("APOLLO_API_KEY") or "").strip())
 
 
 @app.route("/")
 def index():
-    authenticated = oauth.is_authenticated()
-    return render_template("index.html", apollo_connected=authenticated)
+    return render_template("index.html", apollo_connected=apollo_api_configured())
 
 
 # --- OAuth routes ---
@@ -78,10 +80,18 @@ def auth_callback():
     return redirect("/")
 
 
+@app.route("/auth/logout")
+def auth_logout():
+    """Clear Apollo OAuth tokens (e.g. after rotating APOLLO_API_KEY)."""
+    oauth.clear_tokens()
+    session.clear()
+    return redirect("/")
+
+
 @app.route("/auth/status")
 def auth_status():
-    """Check if Apollo OAuth is connected."""
-    return jsonify({"connected": oauth.is_authenticated()})
+    """Whether Apollo API key is set (People API Search / enrichment)."""
+    return jsonify({"connected": apollo_api_configured()})
 
 
 # --- API routes ---
@@ -150,14 +160,21 @@ def api_preview():
                 "error": str(e),
             })
 
-    min_per = data.get("min_per_company", 1)
-    max_per = data.get("max_per_company", 50)
+    try:
+        min_per = int(data.get("min_per_company", 1) or 1)
+    except (TypeError, ValueError):
+        min_per = 1
+    try:
+        max_per = int(data.get("max_per_company", 50) or 50)
+    except (TypeError, ValueError):
+        max_per = 50
+    min_per = max(1, min_per)
+    max_per = max(1, max_per)
 
-    # Clamp people counts to the max for estimation purposes
     for r in results:
         if "people_count" in r:
-            r["people_count_raw"] = r["people_count"]
-            r["people_count"] = min(r["people_count"], max_per)
+            fields = preview_people_fields(r["people_count"], min_per, max_per)
+            r.update(fields)
 
     total_people = sum(r.get("people_count", 0) for r in results)
 

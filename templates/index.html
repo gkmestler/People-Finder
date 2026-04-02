@@ -287,13 +287,12 @@
       <h1>Apollo Enricher</h1>
       <p>Find and enrich contacts at target companies. Powered by Apollo + Claude.</p>
       {% if not apollo_connected %}
-      <div style="background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.25); border-radius: 8px; padding: 14px 18px; margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 13px; color: var(--red);">Apollo people search requires OAuth. Connect your account to search for contacts.</span>
-        <a href="/auth/login" class="btn btn-primary" style="white-space: nowrap;">Connect Apollo</a>
+      <div style="background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.25); border-radius: 8px; padding: 14px 18px; margin-top: 16px; font-size: 13px; color: var(--red);">
+        People search uses Apollo’s <strong>People API Search</strong> (<code>mixed_people/api_search</code>). Set a <strong>master</strong> <code>APOLLO_API_KEY</code> in <code>.env</code> (Apollo → Settings → API), then restart the app.
       </div>
       {% else %}
       <div style="background: rgba(52, 211, 153, 0.08); border: 1px solid rgba(52, 211, 153, 0.25); border-radius: 8px; padding: 10px 18px; margin-top: 16px; font-size: 13px; color: var(--green);">
-        Apollo connected
+        Apollo API key configured (People API Search)
       </div>
       {% endif %}
     </header>
@@ -479,6 +478,10 @@
           const tr = document.createElement('tr');
           if (r.error) {
             tr.innerHTML = `<td>${r.company_input}</td><td class="no-result" title="${r.error}">Error: ${r.error}</td><td>-</td>`;
+          } else if (r.skipped_below_min) {
+            const cap = r.people_count_capped;
+            const minP = getMinPerCompany();
+            tr.innerHTML = `<td>${r.company_input}</td><td>${r.org_name}</td><td class="no-result">Skipped (${cap} found, min ${minP})</td>`;
           } else {
             const raw = r.people_count_raw !== undefined ? r.people_count_raw : r.people_count;
             const capped = r.people_count;

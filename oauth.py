@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 import hashlib
 import base64
 import secrets
@@ -19,6 +20,25 @@ TOKEN_URL = f"{MCP_BASE}/api/v1/oauth/token"
 
 REDIRECT_URI = "http://localhost:5001/auth/callback"
 SCOPES = "mixed_people_api_search"
+
+# Refresh this many seconds before Apollo's expires_in to avoid edge 401s
+_EXPIRY_SKEW_SEC = 120
+
+
+def _api_key_fingerprint(api_key: str | None) -> str | None:
+    if not api_key or not str(api_key).strip():
+        return None
+    return hashlib.sha256(str(api_key).strip().encode()).hexdigest()
+
+
+def _attach_expiry(tokens: dict) -> dict:
+    """Persist expires_at (unix time) from expires_in for proactive refresh."""
+    try:
+        expires_in = int(tokens.get("expires_in", 3600))
+    except (TypeError, ValueError):
+        expires_in = 3600
+    tokens["expires_at"] = time.time() + max(60, expires_in) - _EXPIRY_SKEW_SEC
+    return tokens
 
 
 def _register_client() -> dict:
@@ -84,7 +104,10 @@ def exchange_code(code: str, code_verifier: str) -> dict:
         "code_verifier": code_verifier,
     }, timeout=15)
     resp.raise_for_status()
-    tokens = resp.json()
+    tokens = _attach_expiry(resp.json())
+    fp = _api_key_fingerprint(os.getenv("APOLLO_API_KEY"))
+    if fp:
+        tokens["api_key_fp"] = fp
 
     with open(TOKEN_FILE, "w") as f:
         json.dump(tokens, f)
@@ -95,6 +118,8 @@ def refresh_access_token() -> dict | None:
     """Refresh the access token using the refresh token."""
     tokens = load_tokens()
     if not tokens or not tokens.get("refresh_token"):
+        return None
+    if not tokens_match_current_api_key(tokens):
         return None
 
     client = get_client()
@@ -107,10 +132,12 @@ def refresh_access_token() -> dict | None:
     if not resp.ok:
         return None
 
-    new_tokens = resp.json()
+    new_tokens = _attach_expiry(resp.json())
     # Keep refresh token if not returned
     if "refresh_token" not in new_tokens and tokens.get("refresh_token"):
         new_tokens["refresh_token"] = tokens["refresh_token"]
+    if tokens.get("api_key_fp"):
+        new_tokens["api_key_fp"] = tokens["api_key_fp"]
 
     with open(TOKEN_FILE, "w") as f:
         json.dump(new_tokens, f)
@@ -126,13 +153,46 @@ def load_tokens() -> dict | None:
 
 
 def get_access_token() -> str | None:
-    """Get a valid access token, refreshing if needed."""
+    """Get a valid access token, refreshing if expired or near expiry."""
     tokens = load_tokens()
     if not tokens:
         return None
-    return tokens.get("access_token")
+    if not tokens_match_current_api_key(tokens):
+        return None
+    exp = tokens.get("expires_at")
+    if exp is not None:
+        try:
+            if time.time() >= float(exp):
+                refreshed = refresh_access_token()
+                if refreshed:
+                    tokens = load_tokens() or {}
+        except (TypeError, ValueError):
+            pass
+    return tokens.get("access_token") if tokens else None
+
+
+def tokens_match_current_api_key(tokens: dict) -> bool:
+    """OAuth tokens are tied to the master API key in use; key change requires reconnect."""
+    want = _api_key_fingerprint(os.getenv("APOLLO_API_KEY"))
+    if not want:
+        return False
+    got = tokens.get("api_key_fp")
+    if not got:
+        return False
+    return got == want
 
 
 def is_authenticated() -> bool:
-    """Check if we have stored tokens."""
-    return load_tokens() is not None
+    """True if we have tokens issued for the current APOLLO_API_KEY."""
+    tokens = load_tokens()
+    if not tokens:
+        return False
+    if not tokens.get("access_token") and not tokens.get("refresh_token"):
+        return False
+    return tokens_match_current_api_key(tokens)
+
+
+def clear_tokens() -> None:
+    """Remove stored OAuth tokens (e.g. disconnect)."""
+    if os.path.isfile(TOKEN_FILE):
+        os.remove(TOKEN_FILE)
