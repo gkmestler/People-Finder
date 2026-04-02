@@ -53,7 +53,7 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
     ws.row_dimensions[1].height = 28
 
     # --- Sort contacts by company name ---
-    contacts_sorted = sorted(contacts, key=lambda c: (c.get("organization_name", ""), c.get("last_name", "")))
+    contacts_sorted = sorted(contacts, key=lambda c: (c.get("organization_name") or "", c.get("last_name") or ""))
 
     # --- Data rows ---
     for i, contact in enumerate(contacts_sorted, 2):
