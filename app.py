@@ -14,8 +14,16 @@ import oauth
 
 load_dotenv()
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+logger.info("Creating Flask app...")
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(32).hex())
+
+logger.info("Flask app created successfully")
 
 
 def get_apollo_client():
@@ -30,8 +38,14 @@ def apollo_api_configured() -> bool:
     return bool((os.getenv("APOLLO_API_KEY") or "").strip())
 
 
+@app.route("/health")
+def health():
+    return "ok", 200
+
+
 @app.route("/")
 def index():
+    logger.info("Serving index page")
     return render_template("index.html", apollo_connected=apollo_api_configured())
 
 
