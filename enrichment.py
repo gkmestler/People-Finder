@@ -1,41 +1,15 @@
 """Core enrichment orchestration: ties Apollo search, enrichment, and output together."""
 
+from __future__ import annotations
+
 import time
 from apollo_client import ApolloClient
-
-
-def preview_people_fields(
-    total_matches: int,
-    min_per_company: int,
-    max_per_company: int,
-) -> dict:
-    """How many people preview/enrich will count for one org (same rules as run_enrichment).
-
-    Enrichment caps the list at max_per_company and skips the org when fewer than
-    min_per_company matches. Preview uses Apollo's total count the same way.
-    """
-    raw = max(0, int(total_matches))
-    capped = min(raw, max_per_company)
-    if capped < min_per_company:
-        return {
-            "people_count_raw": raw,
-            "people_count_capped": capped,
-            "people_count": 0,
-            "skipped_below_min": True,
-        }
-    return {
-        "people_count_raw": raw,
-        "people_count_capped": capped,
-        "people_count": capped,
-        "skipped_below_min": False,
-    }
 
 
 def run_enrichment(
     apollo: ApolloClient,
     companies: list[str],
     titles: list[str],
-    min_per_company: int = 1,
     max_per_company: int = 50,
     on_progress=None,
 ) -> dict:
@@ -45,7 +19,6 @@ def run_enrichment(
         apollo: ApolloClient instance
         companies: list of company names to search
         titles: list of expanded job titles to search for
-        min_per_company: minimum people to find per company (skip company if fewer)
         max_per_company: maximum people to keep per company
         on_progress: optional callback(step, message, pct) for progress updates
 
@@ -118,10 +91,6 @@ def run_enrichment(
             )
         except Exception as e:
             progress("people_search", f"Error searching people at {company}: {e}", pct)
-            continue
-
-        if len(people) < min_per_company:
-            progress("people_search", f"Skipping {org_info['name']}: only {len(people)} people (min {min_per_company})", pct)
             continue
 
         people = people[:max_per_company]

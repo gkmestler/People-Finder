@@ -1,5 +1,8 @@
 """Build formatted Excel spreadsheet from enrichment results."""
 
+from __future__ import annotations
+
+import io
 import os
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -23,16 +26,16 @@ HEADERS = ["Company", "First Name", "Last Name", "Title", "Email", "Email Status
 COL_WIDTHS = [35, 15, 20, 45, 40, 15, 55]
 
 
-def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str) -> str:
+def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str | None = None) -> str | io.BytesIO:
     """Build a formatted Excel spreadsheet from enrichment results.
 
     Args:
         contacts: list of enriched contact dicts
         no_results: list of company names with no Apollo results
-        output_path: file path to save the .xlsx
+        output_path: file path to save the .xlsx, or None to return a BytesIO object
 
     Returns:
-        output_path
+        output_path if saving to disk, or BytesIO object if output_path is None
     """
     wb = Workbook()
     ws = wb.active
@@ -134,6 +137,12 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
 
     # --- Auto-filter ---
     ws.auto_filter.ref = f"A1:G{len(contacts_sorted) + 1}"
+
+    if output_path is None:
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     wb.save(output_path)

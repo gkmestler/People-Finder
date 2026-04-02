@@ -1,9 +1,6 @@
-"""Apollo Contact Enricher - Flask web app."""
+"""Apollo Contact Enricher - Flask web app (Vercel-compatible)."""
 
 import os
-import json
-import uuid
-import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, session
 
@@ -11,7 +8,7 @@ from dotenv import load_dotenv
 
 from apollo_client import ApolloClient
 from claude_client import expand_titles
-from enrichment import run_enrichment, preview_people_fields
+from enrichment import run_enrichment
 from excel_builder import build_spreadsheet
 import oauth
 
@@ -19,11 +16,6 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(32).hex())
-app.config["OUTPUT_DIR"] = os.path.join(os.path.dirname(__file__), "output")
-os.makedirs(app.config["OUTPUT_DIR"], exist_ok=True)
-
-# In-memory job tracking
-jobs = {}
 
 
 def get_apollo_client():
@@ -161,20 +153,17 @@ def api_preview():
             })
 
     try:
-        min_per = int(data.get("min_per_company", 1) or 1)
-    except (TypeError, ValueError):
-        min_per = 1
-    try:
         max_per = int(data.get("max_per_company", 50) or 50)
     except (TypeError, ValueError):
         max_per = 50
-    min_per = max(1, min_per)
     max_per = max(1, max_per)
 
     for r in results:
         if "people_count" in r:
-            fields = preview_people_fields(r["people_count"], min_per, max_per)
-            r.update(fields)
+            raw = r["people_count"]
+            capped = min(raw, max_per)
+            r["people_count_raw"] = raw
+            r["people_count"] = capped
 
     total_people = sum(r.get("people_count", 0) for r in results)
 
@@ -188,7 +177,7 @@ def api_preview():
 
 @app.route("/api/enrich", methods=["POST"])
 def api_enrich():
-    """Start the full enrichment job. Returns a job ID for polling."""
+    """Run enrichment synchronously and return the Excel file directly."""
     data = request.json
     companies = data.get("companies", [])
     titles = data.get("titles", [])
@@ -201,72 +190,27 @@ def api_enrich():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    job_id = str(uuid.uuid4())[:8]
-    jobs[job_id] = {
-        "status": "running",
-        "progress": 0,
-        "step": "starting",
-        "message": "Initializing...",
-        "result": None,
-        "error": None,
-        "file_path": None,
-    }
+    try:
+        result = run_enrichment(
+            apollo, companies, titles,
+            max_per_company=data.get("max_per_company", 50),
+        )
 
-    def run_job():
-        try:
-            def on_progress(step, msg, pct):
-                jobs[job_id]["step"] = step
-                jobs[job_id]["message"] = msg
-                if pct is not None:
-                    jobs[job_id]["progress"] = pct
+        # Build spreadsheet in memory
+        buf = build_spreadsheet(result["contacts"], result["no_results"])
 
-            result = run_enrichment(
-                apollo, companies, titles,
-                min_per_company=data.get("min_per_company", 1),
-                max_per_company=data.get("max_per_company", 50),
-                on_progress=on_progress,
-            )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"apollo_contacts_{timestamp}.xlsx"
 
-            # Build spreadsheet
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"apollo_contacts_{timestamp}.xlsx"
-            filepath = os.path.join(app.config["OUTPUT_DIR"], filename)
-            build_spreadsheet(result["contacts"], result["no_results"], filepath)
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-            jobs[job_id]["status"] = "done"
-            jobs[job_id]["progress"] = 100
-            jobs[job_id]["message"] = f"Done! {result['stats']['people_enriched']} contacts enriched."
-            jobs[job_id]["result"] = result["stats"]
-            jobs[job_id]["file_path"] = filepath
-            jobs[job_id]["filename"] = filename
-
-        except Exception as e:
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = str(e)
-            jobs[job_id]["message"] = f"Error: {e}"
-
-    thread = threading.Thread(target=run_job, daemon=True)
-    thread.start()
-
-    return jsonify({"job_id": job_id})
-
-
-@app.route("/api/job/<job_id>")
-def api_job_status(job_id):
-    """Poll job status."""
-    job = jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-    return jsonify(job)
-
-
-@app.route("/api/download/<job_id>")
-def api_download(job_id):
-    """Download the result spreadsheet."""
-    job = jobs.get(job_id)
-    if not job or not job.get("file_path"):
-        return jsonify({"error": "File not ready"}), 404
-    return send_file(job["file_path"], as_attachment=True, download_name=job.get("filename", "contacts.xlsx"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

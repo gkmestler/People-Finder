@@ -1,5 +1,7 @@
 """Claude API client for expanding title lists with similar/related titles."""
 
+from __future__ import annotations
+
 import json
 import anthropic
 

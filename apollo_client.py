@@ -1,5 +1,7 @@
 """Apollo API client for org search, people search, and enrichment."""
 
+from __future__ import annotations
+
 import time
 import requests
 

@@ -1,28 +1,37 @@
-"""Apollo OAuth 2.0 flow via mcp.apollo.io."""
+"""Apollo OAuth 2.0 flow via mcp.apollo.io.
+
+Tokens are stored in-memory (compatible with serverless / Vercel).
+On serverless platforms, tokens won't persist across cold starts —
+users may need to re-authenticate after idle periods.
+"""
 
 from __future__ import annotations
 
 import os
-import json
-import time
 import hashlib
 import base64
 import secrets
+import time
 import requests
-
-TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".apollo_oauth_token.json")
-CLIENT_FILE = os.path.join(os.path.dirname(__file__), ".apollo_oauth_client.json")
 
 MCP_BASE = "https://mcp.apollo.io"
 REGISTRATION_URL = f"{MCP_BASE}/api/v1/oauth/applications/register_oauth_client"
 AUTHORIZE_URL = f"{MCP_BASE}/mcp/oauth_metadata/redirect_to_authorize"
 TOKEN_URL = f"{MCP_BASE}/api/v1/oauth/token"
 
-REDIRECT_URI = "http://localhost:5001/auth/callback"
 SCOPES = "mixed_people_api_search"
 
 # Refresh this many seconds before Apollo's expires_in to avoid edge 401s
 _EXPIRY_SKEW_SEC = 120
+
+# In-memory storage (works on both local and serverless)
+_tokens: dict | None = None
+_client: dict | None = None
+
+
+def _get_redirect_uri() -> str:
+    """Return the OAuth redirect URI, configurable via env for deployment."""
+    return os.getenv("OAUTH_REDIRECT_URI", "http://localhost:5001/auth/callback")
 
 
 def _api_key_fingerprint(api_key: str | None) -> str | None:
@@ -43,24 +52,22 @@ def _attach_expiry(tokens: dict) -> dict:
 
 def _register_client() -> dict:
     """Dynamically register an OAuth client."""
-    if os.path.exists(CLIENT_FILE):
-        with open(CLIENT_FILE) as f:
-            return json.load(f)
+    global _client
+    if _client:
+        return _client
 
+    redirect_uri = _get_redirect_uri()
     resp = requests.post(REGISTRATION_URL, json={
-        "client_name": "Apollo Enricher Local",
-        "redirect_uris": [REDIRECT_URI],
+        "client_name": "Apollo Enricher",
+        "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
         "scope": SCOPES,
     }, timeout=15)
     resp.raise_for_status()
-    client = resp.json()
-
-    with open(CLIENT_FILE, "w") as f:
-        json.dump(client, f)
-    return client
+    _client = resp.json()
+    return _client
 
 
 def get_client():
@@ -79,10 +86,11 @@ def generate_auth_url() -> tuple[str, str, str]:
     )
     code_challenge_b64 = base64.urlsafe_b64encode(code_challenge).rstrip(b"=").decode()
 
+    redirect_uri = _get_redirect_uri()
     params = {
         "response_type": "code",
         "client_id": client["client_id"],
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "scope": SCOPES,
         "state": state,
         "code_challenge": code_challenge_b64,
@@ -95,11 +103,13 @@ def generate_auth_url() -> tuple[str, str, str]:
 
 def exchange_code(code: str, code_verifier: str) -> dict:
     """Exchange authorization code for tokens."""
+    global _tokens
     client = get_client()
+    redirect_uri = _get_redirect_uri()
     resp = requests.post(TOKEN_URL, data={
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "client_id": client["client_id"],
         "code_verifier": code_verifier,
     }, timeout=15)
@@ -109,14 +119,14 @@ def exchange_code(code: str, code_verifier: str) -> dict:
     if fp:
         tokens["api_key_fp"] = fp
 
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(tokens, f)
+    _tokens = tokens
     return tokens
 
 
 def refresh_access_token() -> dict | None:
     """Refresh the access token using the refresh token."""
-    tokens = load_tokens()
+    global _tokens
+    tokens = _tokens
     if not tokens or not tokens.get("refresh_token"):
         return None
     if not tokens_match_current_api_key(tokens):
@@ -133,28 +143,19 @@ def refresh_access_token() -> dict | None:
         return None
 
     new_tokens = _attach_expiry(resp.json())
-    # Keep refresh token if not returned
     if "refresh_token" not in new_tokens and tokens.get("refresh_token"):
         new_tokens["refresh_token"] = tokens["refresh_token"]
     if tokens.get("api_key_fp"):
         new_tokens["api_key_fp"] = tokens["api_key_fp"]
 
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(new_tokens, f)
+    _tokens = new_tokens
     return new_tokens
-
-
-def load_tokens() -> dict | None:
-    """Load stored tokens."""
-    if not os.path.exists(TOKEN_FILE):
-        return None
-    with open(TOKEN_FILE) as f:
-        return json.load(f)
 
 
 def get_access_token() -> str | None:
     """Get a valid access token, refreshing if expired or near expiry."""
-    tokens = load_tokens()
+    global _tokens
+    tokens = _tokens
     if not tokens:
         return None
     if not tokens_match_current_api_key(tokens):
@@ -165,7 +166,7 @@ def get_access_token() -> str | None:
             if time.time() >= float(exp):
                 refreshed = refresh_access_token()
                 if refreshed:
-                    tokens = load_tokens() or {}
+                    tokens = _tokens
         except (TypeError, ValueError):
             pass
     return tokens.get("access_token") if tokens else None
@@ -184,7 +185,7 @@ def tokens_match_current_api_key(tokens: dict) -> bool:
 
 def is_authenticated() -> bool:
     """True if we have tokens issued for the current APOLLO_API_KEY."""
-    tokens = load_tokens()
+    tokens = _tokens
     if not tokens:
         return False
     if not tokens.get("access_token") and not tokens.get("refresh_token"):
@@ -194,5 +195,5 @@ def is_authenticated() -> bool:
 
 def clear_tokens() -> None:
     """Remove stored OAuth tokens (e.g. disconnect)."""
-    if os.path.isfile(TOKEN_FILE):
-        os.remove(TOKEN_FILE)
+    global _tokens
+    _tokens = None

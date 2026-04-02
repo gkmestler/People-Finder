@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 .apollo_oauth_client.json
 .apollo_oauth_token.json
+.vercel/

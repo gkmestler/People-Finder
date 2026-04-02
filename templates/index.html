@@ -323,18 +323,11 @@
     <!-- Step 3: People per company -->
     <div class="card">
       <h2><span class="step-num">3</span> People Per Company</h2>
-      <p class="subtitle">Limit how many contacts to find per company</p>
-      <div style="display: flex; gap: 16px; margin-top: 4px;">
-        <div style="flex: 1;">
-          <label for="minPerCompany">Minimum</label>
-          <input type="number" id="minPerCompany" min="1" max="500" value="1"
-            style="width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 10px 14px; outline: none;">
-        </div>
-        <div style="flex: 1;">
-          <label for="maxPerCompany">Maximum</label>
-          <input type="number" id="maxPerCompany" min="1" max="500" value="50"
-            style="width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 10px 14px; outline: none;">
-        </div>
+      <p class="subtitle">Maximum contacts to find per company</p>
+      <div style="margin-top: 4px; max-width: 200px;">
+        <label for="maxPerCompany">Maximum</label>
+        <input type="number" id="maxPerCompany" min="1" max="500" value="50"
+          style="width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 10px 14px; outline: none;">
       </div>
     </div>
 
@@ -382,7 +375,6 @@
 
   <script>
     let expandedTitlesList = [];
-    let currentJobId = null;
 
     function getCompanies() {
       return document.getElementById('companies').value
@@ -400,10 +392,6 @@
 
     function getTitles() {
       return expandedTitlesList.length > 0 ? expandedTitlesList : getUserTitles();
-    }
-
-    function getMinPerCompany() {
-      return parseInt(document.getElementById('minPerCompany').value) || 1;
     }
 
     function getMaxPerCompany() {
@@ -466,7 +454,7 @@
         const resp = await fetch('/api/preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companies, titles, min_per_company: getMinPerCompany(), max_per_company: getMaxPerCompany() }),
+          body: JSON.stringify({ companies, titles, max_per_company: getMaxPerCompany() }),
         });
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
@@ -478,10 +466,6 @@
           const tr = document.createElement('tr');
           if (r.error) {
             tr.innerHTML = `<td>${r.company_input}</td><td class="no-result" title="${r.error}">Error: ${r.error}</td><td>-</td>`;
-          } else if (r.skipped_below_min) {
-            const cap = r.people_count_capped;
-            const minP = getMinPerCompany();
-            tr.innerHTML = `<td>${r.company_input}</td><td>${r.org_name}</td><td class="no-result">Skipped (${cap} found, min ${minP})</td>`;
           } else {
             const raw = r.people_count_raw !== undefined ? r.people_count_raw : r.people_count;
             const capped = r.people_count;
@@ -515,65 +499,55 @@
 
       const btn = document.getElementById('enrichBtn');
       btn.disabled = true;
-      btn.textContent = 'Starting...';
+      btn.textContent = 'Enriching...';
 
       document.getElementById('progressSection').classList.remove('hidden');
       document.getElementById('downloadSection').classList.add('hidden');
+      document.getElementById('progressBar').style.width = '50%';
+      document.getElementById('progressMsg').textContent = 'Searching and enriching contacts... this may take a minute.';
 
       try {
         const resp = await fetch('/api/enrich', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companies, titles, min_per_company: getMinPerCompany(), max_per_company: getMaxPerCompany() }),
+          body: JSON.stringify({ companies, titles, max_per_company: getMaxPerCompany() }),
         });
-        const data = await resp.json();
-        if (data.error) throw new Error(data.error);
 
-        currentJobId = data.job_id;
-        pollJob();
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.error || 'Enrichment failed');
+        }
+
+        // Response is the Excel file — trigger download
+        const blob = await resp.blob();
+        const disposition = resp.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename="?([^"]+)"?/);
+        const filename = match ? match[1] : 'apollo_contacts.xlsx';
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        document.getElementById('progressSection').classList.add('hidden');
+        document.getElementById('resultCount').textContent = companies.length;
+        document.getElementById('resultCredits').textContent = '';
+        document.getElementById('downloadSection').classList.remove('hidden');
+        document.getElementById('downloadSection').querySelector('.stats').innerHTML =
+          '<strong>Done!</strong> File downloaded.';
+        // Hide the download link since file was already auto-downloaded
+        document.getElementById('downloadLink').classList.add('hidden');
 
       } catch (e) {
+        document.getElementById('progressMsg').textContent = 'Error: ' + e.message;
         alert('Error: ' + e.message);
+      } finally {
         btn.disabled = false;
         btn.textContent = 'Enrich All';
-      }
-    }
-
-    async function pollJob() {
-      if (!currentJobId) return;
-
-      try {
-        const resp = await fetch(`/api/job/${currentJobId}`);
-        const job = await resp.json();
-
-        document.getElementById('progressBar').style.width = job.progress + '%';
-        document.getElementById('progressMsg').textContent = job.message;
-
-        if (job.status === 'done') {
-          document.getElementById('progressSection').classList.add('hidden');
-
-          const stats = job.result || {};
-          document.getElementById('resultCount').textContent = stats.people_enriched || 0;
-          document.getElementById('resultCredits').textContent = ` (${stats.orgs_found || 0} companies)`;
-          document.getElementById('downloadLink').href = `/api/download/${currentJobId}`;
-          document.getElementById('downloadSection').classList.remove('hidden');
-
-          document.getElementById('enrichBtn').disabled = false;
-          document.getElementById('enrichBtn').textContent = 'Enrich All';
-          return;
-        }
-
-        if (job.status === 'error') {
-          document.getElementById('progressMsg').textContent = 'Error: ' + job.error;
-          document.getElementById('enrichBtn').disabled = false;
-          document.getElementById('enrichBtn').textContent = 'Enrich All';
-          return;
-        }
-
-        setTimeout(pollJob, 1000);
-
-      } catch (e) {
-        setTimeout(pollJob, 2000);
       }
     }
   </script>
