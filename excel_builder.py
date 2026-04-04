@@ -23,10 +23,12 @@ THIN_BORDER = Border(
 )
 
 HEADERS = ["Company", "First Name", "Last Name", "Title", "Email", "Email Status", "LinkedIn URL"]
+HEADERS_WITH_PHONE = ["Company", "First Name", "Last Name", "Title", "Phone", "Email", "Email Status", "LinkedIn URL"]
 COL_WIDTHS = [35, 15, 20, 45, 40, 15, 55]
+COL_WIDTHS_WITH_PHONE = [35, 15, 20, 45, 20, 40, 15, 55]
 
 
-def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str | None = None) -> str | io.BytesIO:
+def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str | None = None, include_phone: bool = False) -> str | io.BytesIO:
     """Build a formatted Excel spreadsheet from enrichment results.
 
     Args:
@@ -41,8 +43,11 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
     ws = wb.active
     ws.title = "Contacts"
 
+    headers = HEADERS_WITH_PHONE if include_phone else HEADERS
+    col_widths = COL_WIDTHS_WITH_PHONE if include_phone else COL_WIDTHS
+
     # --- Headers ---
-    for col, (header, width) in enumerate(zip(HEADERS, COL_WIDTHS), 1):
+    for col, (header, width) in enumerate(zip(headers, col_widths), 1):
         cell = ws.cell(row=1, column=col, value=header)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
@@ -55,6 +60,8 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
     # --- Sort contacts by company name ---
     contacts_sorted = sorted(contacts, key=lambda c: (c.get("organization_name") or "", c.get("last_name") or ""))
 
+    num_cols = len(headers)
+
     # --- Data rows ---
     for i, contact in enumerate(contacts_sorted, 2):
         row_data = [
@@ -62,10 +69,14 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
             contact.get("first_name", ""),
             contact.get("last_name", ""),
             contact.get("title", ""),
+        ]
+        if include_phone:
+            row_data.append(contact.get("phone_number") or "")
+        row_data.extend([
             contact.get("email") or "",
             contact.get("email_status", ""),
             contact.get("linkedin_url", ""),
-        ]
+        ])
 
         email = contact.get("email")
         status = contact.get("email_status", "")
@@ -90,7 +101,7 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
         row = start_row + j
         ws.cell(row=row, column=1, value=company).font = BODY_FONT
         ws.cell(row=row, column=4, value="NO RESULTS IN APOLLO").font = Font(name="Arial", size=10, italic=True)
-        for col in range(1, 8):
+        for col in range(1, num_cols + 1):
             cell = ws.cell(row=row, column=col)
             cell.fill = PINK_FILL
             cell.border = THIN_BORDER
@@ -136,7 +147,8 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
     ws.freeze_panes = "A2"
 
     # --- Auto-filter ---
-    ws.auto_filter.ref = f"A1:G{len(contacts_sorted) + 1}"
+    last_col = chr(ord('A') + num_cols - 1)
+    ws.auto_filter.ref = f"A1:{last_col}{len(contacts_sorted) + 1}"
 
     if output_path is None:
         buf = io.BytesIO()

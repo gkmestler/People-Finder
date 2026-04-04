@@ -204,6 +204,8 @@ def api_enrich():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    include_phone = bool(data.get("include_phone", False))
+
     try:
         result = run_enrichment(
             apollo, companies, titles,
@@ -211,7 +213,7 @@ def api_enrich():
         )
 
         # Build spreadsheet in memory
-        buf = build_spreadsheet(result["contacts"], result["no_results"])
+        buf = build_spreadsheet(result["contacts"], result["no_results"], include_phone=include_phone)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"apollo_contacts_{timestamp}.xlsx"

@@ -161,7 +161,7 @@ class ApolloClient:
         for m in matches:
             if not m:
                 continue
-            enriched.append({
+            entry = {
                 "first_name": m.get("first_name", ""),
                 "last_name": m.get("last_name", ""),
                 "title": m.get("title", ""),
@@ -169,7 +169,14 @@ class ApolloClient:
                 "email_status": m.get("email_status", ""),
                 "linkedin_url": m.get("linkedin_url", ""),
                 "organization_name": (m.get("organization") or {}).get("name", ""),
-            })
+            }
+            # Extract phone numbers if available
+            phone_numbers = m.get("phone_numbers") or []
+            if phone_numbers:
+                entry["phone_number"] = phone_numbers[0].get("sanitized_number") or phone_numbers[0].get("raw_number", "")
+            else:
+                entry["phone_number"] = ""
+            enriched.append(entry)
 
         return enriched
 

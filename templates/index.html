@@ -276,6 +276,69 @@
       color: var(--green);
     }
 
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .toggle-row .toggle-label {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .toggle-row .toggle-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      transition: 0.2s;
+    }
+
+    .toggle-slider:before {
+      content: "";
+      position: absolute;
+      height: 16px;
+      width: 16px;
+      left: 2px;
+      bottom: 2px;
+      background: var(--text-dim);
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }
+
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(18px);
+      background: var(--accent);
+    }
+
     .hidden { display: none !important; }
     .mt-12 { margin-top: 12px; }
     .mt-16 { margin-top: 16px; }
@@ -328,6 +391,17 @@
         <label for="maxPerCompany">Maximum</label>
         <input type="number" id="maxPerCompany" min="1" max="500" value="50"
           style="width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 10px 14px; outline: none;">
+      </div>
+
+      <div class="toggle-row">
+        <label class="toggle-switch" style="display: inline-block; margin-bottom: 0;">
+          <input type="checkbox" id="includePhone">
+          <span class="toggle-slider"></span>
+        </label>
+        <div>
+          <span class="toggle-label">Include Phone Numbers</span><br>
+          <span class="toggle-hint">Uses additional enrichment tokens</span>
+        </div>
       </div>
     </div>
 
@@ -396,6 +470,10 @@
 
     function getMaxPerCompany() {
       return parseInt(document.getElementById('maxPerCompany').value) || 50;
+    }
+
+    function getIncludePhone() {
+      return document.getElementById('includePhone').checked;
     }
 
     async function expandTitles() {
@@ -510,7 +588,7 @@
         const resp = await fetch('/api/enrich', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companies, titles, max_per_company: getMaxPerCompany() }),
+          body: JSON.stringify({ companies, titles, max_per_company: getMaxPerCompany(), include_phone: getIncludePhone() }),
         });
 
         if (!resp.ok) {
