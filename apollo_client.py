@@ -139,7 +139,7 @@ class ApolloClient:
 
         return all_people
 
-    def bulk_enrich(self, people: list[dict], reveal_phone: bool = False) -> list[dict]:
+    def bulk_enrich(self, people: list[dict]) -> list[dict]:
         """Enrich up to 10 people. Returns enriched data with key fields only."""
         details = []
         for p in people[:10]:
@@ -154,24 +154,15 @@ class ApolloClient:
                 entry["linkedin_url"] = p["linkedin_url"]
             details.append(entry)
 
-        payload = {"details": details}
-        if reveal_phone:
-            payload["reveal_phone_number"] = True
-            try:
-                data = self._post("/api/v1/people/bulk_match", payload)
-            except Exception:
-                # Phone reveal may not be available on this plan — retry without it
-                payload.pop("reveal_phone_number", None)
-                data = self._post("/api/v1/people/bulk_match", payload)
-        else:
-            data = self._post("/api/v1/people/bulk_match", payload)
+        data = self._post("/api/v1/people/bulk_match", {"details": details})
         matches = data.get("matches", [])
 
         enriched = []
         for m in matches:
             if not m:
                 continue
-            entry = {
+            enriched.append({
+                "_person_id": m.get("id", ""),
                 "first_name": m.get("first_name", ""),
                 "last_name": m.get("last_name", ""),
                 "title": m.get("title", ""),
@@ -179,16 +170,19 @@ class ApolloClient:
                 "email_status": m.get("email_status", ""),
                 "linkedin_url": m.get("linkedin_url", ""),
                 "organization_name": (m.get("organization") or {}).get("name", ""),
-            }
-            # Extract phone numbers if available
-            phone_numbers = m.get("phone_numbers") or []
-            if phone_numbers:
-                entry["phone_number"] = phone_numbers[0].get("sanitized_number") or phone_numbers[0].get("raw_number", "")
-            else:
-                entry["phone_number"] = ""
-            enriched.append(entry)
+                "phone_number": "",
+            })
 
         return enriched
+
+    def reveal_phone(self, person_id: str, webhook_url: str) -> dict:
+        """Request phone number reveal for a single person via webhook."""
+        payload = {
+            "id": person_id,
+            "reveal_phone_number": True,
+            "webhook_url": webhook_url,
+        }
+        return self._post("/api/v1/people/match", payload)
 
     def enrich_all(self, people: list[dict], delay: float = 1.0) -> list[dict]:
         """Enrich a list of people in batches of 10. Returns all enriched results."""

@@ -10,6 +10,7 @@ from apollo_client import ApolloClient
 from claude_client import expand_titles
 from enrichment import run_enrichment
 from excel_builder import build_spreadsheet
+from phone_store import phone_store
 import oauth
 
 load_dotenv()
@@ -36,6 +37,15 @@ def get_apollo_client():
 
 def apollo_api_configured() -> bool:
     return bool((os.getenv("APOLLO_API_KEY") or "").strip())
+
+
+def get_webhook_base_url() -> str:
+    """Get the public base URL for webhooks."""
+    # Allow override via env var (useful if Railway URL differs from request.host_url)
+    override = (os.getenv("WEBHOOK_BASE_URL") or "").strip()
+    if override:
+        return override
+    return request.host_url
 
 
 @app.route("/health")
@@ -98,6 +108,33 @@ def auth_logout():
 def auth_status():
     """Whether Apollo API key is set (People API Search / enrichment)."""
     return jsonify({"connected": apollo_api_configured()})
+
+
+# --- Webhook routes ---
+
+@app.route("/api/webhook/phone", methods=["POST"])
+def webhook_phone():
+    """Receive phone number data from Apollo's async phone reveal."""
+    job_id = request.args.get("job_id")
+    if not job_id:
+        return jsonify({"error": "Missing job_id"}), 400
+
+    job = phone_store.get_job(job_id)
+    if not job:
+        logger.warning(f"Phone webhook received for unknown job: {job_id}")
+        return jsonify({"status": "ignored"}), 200
+
+    data = request.json or {}
+    person = data.get("person") or data
+    person_id = person.get("id", "")
+
+    if person_id:
+        job.record_phone(person_id, person)
+        logger.info(f"Phone webhook: recorded phone for person {person_id} (job {job_id})")
+    else:
+        logger.warning(f"Phone webhook: no person_id in payload for job {job_id}")
+
+    return jsonify({"status": "ok"}), 200
 
 
 # --- API routes ---
@@ -205,12 +242,14 @@ def api_enrich():
         return jsonify({"error": str(e)}), 500
 
     include_phone = bool(data.get("include_phone", False))
+    webhook_base_url = get_webhook_base_url() if include_phone else None
 
     try:
         result = run_enrichment(
             apollo, companies, titles,
             max_per_company=data.get("max_per_company", 50),
             include_phone=include_phone,
+            webhook_base_url=webhook_base_url,
         )
 
         # Build spreadsheet in memory
@@ -233,4 +272,4 @@ def api_enrich():
 if __name__ == "__main__":
     print("\n  Apollo Contact Enricher")
     print("  http://localhost:5001\n")
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5001, threaded=True)
