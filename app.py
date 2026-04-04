@@ -48,9 +48,16 @@ def get_webhook_base_url() -> str:
     return request.host_url
 
 
+_last_webhook_payload = {}
+
 @app.route("/health")
 def health():
     return "ok", 200
+
+@app.route("/debug/last-webhook")
+def debug_last_webhook():
+    """Return the last webhook payload received (for debugging)."""
+    return jsonify(_last_webhook_payload)
 
 
 @app.route("/")
@@ -120,7 +127,9 @@ def webhook_phone(job_id):
         logger.warning(f"Phone webhook received for unknown job: {job_id}")
         return jsonify({"status": "ignored"}), 200
 
+    global _last_webhook_payload
     data = request.json or {}
+    _last_webhook_payload = data
 
     # Log the full payload structure to debug phone field extraction
     logger.info(f"Phone webhook payload keys: {list(data.keys())}")
