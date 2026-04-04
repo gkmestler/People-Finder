@@ -217,12 +217,25 @@ def run_enrichment(
             phone_store.remove_job(job.job_id)
 
             logger.info(f"Phone reveal: got {len(phone_results)}/{len(person_ids)} results")
+            if phone_results:
+                sample_pid = next(iter(phone_results))
+                sample = phone_results[sample_pid]
+                sample_phone_keys = {k: v for k, v in sample.items() if 'phone' in k.lower()}
+                logger.info(f"Phone reveal sample person {sample_pid}: phone_keys={sample_phone_keys}")
+                logger.info(f"Phone reveal sample extracted: '{_extract_phone(sample)}'")
+
+            # Check how many contacts have _person_id
+            ids_in_contacts = [c.get("_person_id") for c in contacts if c.get("_person_id")]
+            logger.info(f"Contacts with _person_id: {len(ids_in_contacts)}, phone_results keys: {list(phone_results.keys())[:5]}")
 
             # Merge phone data into contacts
+            merged = 0
             for contact in contacts:
                 pid = contact.get("_person_id")
                 if pid and pid in phone_results:
                     contact["phone_number"] = _extract_phone(phone_results[pid])
+                    merged += 1
+            logger.info(f"Phone reveal: merged {merged} phone numbers into contacts")
 
             progress("phone_reveal", f"Got phone numbers for {len(phone_results)} contacts", 95)
 

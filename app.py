@@ -121,14 +121,24 @@ def webhook_phone(job_id):
         return jsonify({"status": "ignored"}), 200
 
     data = request.json or {}
+
+    # Log the full payload structure to debug phone field extraction
+    logger.info(f"Phone webhook payload keys: {list(data.keys())}")
     person = data.get("person") or data
     person_id = person.get("id", "")
 
+    # Log all phone-related fields
+    phone_fields = {k: v for k, v in person.items() if 'phone' in k.lower()}
+    logger.info(f"Phone webhook person_id={person_id}, phone_fields={phone_fields}")
+    if person.get("organization"):
+        org_phone = {k: v for k, v in person["organization"].items() if 'phone' in k.lower()}
+        logger.info(f"Phone webhook org phone_fields={org_phone}")
+
     if person_id:
         job.record_phone(person_id, person)
-        logger.info(f"Phone webhook: recorded phone for person {person_id} (job {job_id})")
+        logger.info(f"Phone webhook: recorded for {person_id}, job has {len(job.results)}/{job.expected} results")
     else:
-        logger.warning(f"Phone webhook: no person_id in payload for job {job_id}")
+        logger.warning(f"Phone webhook: no person_id in payload for job {job_id}, keys={list(person.keys())}")
 
     return jsonify({"status": "ok"}), 200
 
