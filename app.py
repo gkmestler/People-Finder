@@ -210,6 +210,7 @@ def api_enrich():
         result = run_enrichment(
             apollo, companies, titles,
             max_per_company=data.get("max_per_company", 50),
+            include_phone=include_phone,
         )
 
         # Build spreadsheet in memory

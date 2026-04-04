@@ -139,7 +139,7 @@ class ApolloClient:
 
         return all_people
 
-    def bulk_enrich(self, people: list[dict]) -> list[dict]:
+    def bulk_enrich(self, people: list[dict], reveal_phone: bool = False) -> list[dict]:
         """Enrich up to 10 people. Returns enriched data with key fields only."""
         details = []
         for p in people[:10]:
@@ -154,7 +154,10 @@ class ApolloClient:
                 entry["linkedin_url"] = p["linkedin_url"]
             details.append(entry)
 
-        data = self._post("/api/v1/people/bulk_match", {"details": details})
+        payload = {"details": details}
+        if reveal_phone:
+            payload["reveal_phone_number"] = True
+        data = self._post("/api/v1/people/bulk_match", payload)
         matches = data.get("matches", [])
 
         enriched = []

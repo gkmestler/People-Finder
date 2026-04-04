@@ -11,6 +11,7 @@ def run_enrichment(
     companies: list[str],
     titles: list[str],
     max_per_company: int = 50,
+    include_phone: bool = False,
     on_progress=None,
 ) -> dict:
     """Run the full enrichment pipeline.
@@ -127,7 +128,7 @@ def run_enrichment(
         progress("enrichment", f"Enriching batch {batch_num}/{total_batches}...", pct)
 
         try:
-            enriched = apollo.bulk_enrich(batch)
+            enriched = apollo.bulk_enrich(batch, reveal_phone=include_phone)
             credits_used += len(enriched)
 
             # Tag each enriched contact with the company input name
