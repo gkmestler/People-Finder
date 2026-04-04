@@ -48,16 +48,16 @@ def get_webhook_base_url() -> str:
     return request.host_url
 
 
-_last_webhook_payload = {}
+_webhook_payloads = []  # Store last N webhook payloads for debugging
 
 @app.route("/health")
 def health():
     return "ok", 200
 
-@app.route("/debug/last-webhook")
-def debug_last_webhook():
-    """Return the last webhook payload received (for debugging)."""
-    return jsonify(_last_webhook_payload)
+@app.route("/debug/webhooks")
+def debug_webhooks():
+    """Return recent webhook payloads for debugging."""
+    return jsonify({"count": len(_webhook_payloads), "payloads": _webhook_payloads[-5:]})
 
 
 @app.route("/")
@@ -127,27 +127,26 @@ def webhook_phone(job_id):
         logger.warning(f"Phone webhook received for unknown job: {job_id}")
         return jsonify({"status": "ignored"}), 200
 
-    global _last_webhook_payload
     data = request.json or {}
-    _last_webhook_payload = data
 
-    # Log the full payload structure to debug phone field extraction
-    logger.info(f"Phone webhook payload keys: {list(data.keys())}")
+    # Store full payload for debugging
+    _webhook_payloads.append(data)
+    if len(_webhook_payloads) > 20:
+        _webhook_payloads.pop(0)
+
+    # Log the FULL payload (truncated) so we can see everything Apollo sends
+    import json as _json
+    payload_str = _json.dumps(data)
+    logger.info(f"Phone webhook FULL PAYLOAD ({len(payload_str)} chars): {payload_str[:2000]}")
+
     person = data.get("person") or data
     person_id = person.get("id", "")
 
-    # Log all phone-related fields
-    phone_fields = {k: v for k, v in person.items() if 'phone' in k.lower()}
-    logger.info(f"Phone webhook person_id={person_id}, phone_fields={phone_fields}")
-    if person.get("organization"):
-        org_phone = {k: v for k, v in person["organization"].items() if 'phone' in k.lower()}
-        logger.info(f"Phone webhook org phone_fields={org_phone}")
-
     if person_id:
-        job.record_phone(person_id, person)
+        job.record_phone(person_id, data)  # Store the FULL payload, not just person
         logger.info(f"Phone webhook: recorded for {person_id}, job has {len(job.results)}/{job.expected} results")
     else:
-        logger.warning(f"Phone webhook: no person_id in payload for job {job_id}, keys={list(person.keys())}")
+        logger.warning(f"Phone webhook: no person_id found. Top keys={list(data.keys())}")
 
     return jsonify({"status": "ok"}), 200
 

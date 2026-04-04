@@ -10,28 +10,66 @@ from phone_store import phone_store
 logger = logging.getLogger(__name__)
 
 
-def _extract_phone(phone_data: dict) -> str:
-    """Extract the best phone number from webhook phone data."""
-    # Try phone_numbers array first
-    phone_numbers = phone_data.get("phone_numbers") or []
+def _extract_phone(webhook_data: dict) -> str:
+    """Extract the best phone number from webhook data. Searches all levels."""
+    # The webhook payload might be {"person": {...}} or just the person dict
+    person = webhook_data.get("person") or webhook_data
+
+    # Try phone_numbers array on person
+    phone_numbers = person.get("phone_numbers") or []
     if phone_numbers:
         for pn in phone_numbers:
-            num = pn.get("sanitized_number") or pn.get("raw_number") or ""
+            if isinstance(pn, dict):
+                num = pn.get("sanitized_number") or pn.get("raw_number") or pn.get("number") or ""
+            else:
+                num = str(pn)
             if num:
+                logger.info(f"_extract_phone: found in phone_numbers array: {num}")
                 return num
-    # Try direct fields
-    for field in ("sanitized_phone", "phone", "corporate_phone", "mobile_phone"):
-        val = phone_data.get(field)
-        if val:
+
+    # Try direct fields on person
+    for field in ("sanitized_phone", "phone", "corporate_phone", "mobile_phone",
+                  "direct_phone", "personal_phone", "home_phone", "work_phone"):
+        val = person.get(field)
+        if val and isinstance(val, str):
+            logger.info(f"_extract_phone: found in person.{field}: {val}")
             return val
+
     # Try organization phone
-    org = phone_data.get("organization") or {}
-    org_phone = org.get("phone")
-    if org_phone:
-        return org_phone
+    org = person.get("organization") or {}
+    for field in ("phone", "corporate_phone", "sanitized_phone"):
+        val = org.get(field)
+        if val and isinstance(val, str):
+            logger.info(f"_extract_phone: found in org.{field}: {val}")
+            return val
     primary = org.get("primary_phone") or {}
-    if primary.get("number"):
+    if isinstance(primary, dict) and primary.get("number"):
+        logger.info(f"_extract_phone: found in org.primary_phone.number: {primary['number']}")
         return primary["number"]
+
+    # Last resort: search ALL keys recursively for anything phone-like
+    def _find_phone_recursive(d, path=""):
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if 'phone' in k.lower() and isinstance(v, str) and len(v) >= 7:
+                    logger.info(f"_extract_phone: found via recursive search at {path}.{k}: {v}")
+                    return v
+                if isinstance(v, (dict, list)):
+                    result = _find_phone_recursive(v, f"{path}.{k}")
+                    if result:
+                        return result
+        elif isinstance(d, list):
+            for i, item in enumerate(d):
+                result = _find_phone_recursive(item, f"{path}[{i}]")
+                if result:
+                    return result
+        return None
+
+    found = _find_phone_recursive(webhook_data)
+    if found:
+        return found
+
+    logger.warning(f"_extract_phone: NO phone found in payload. Keys: {list(person.keys())}")
     return ""
 
 
