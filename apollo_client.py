@@ -157,7 +157,14 @@ class ApolloClient:
         payload = {"details": details}
         if reveal_phone:
             payload["reveal_phone_number"] = True
-        data = self._post("/api/v1/people/bulk_match", payload)
+            try:
+                data = self._post("/api/v1/people/bulk_match", payload)
+            except Exception:
+                # Phone reveal may not be available on this plan — retry without it
+                payload.pop("reveal_phone_number", None)
+                data = self._post("/api/v1/people/bulk_match", payload)
+        else:
+            data = self._post("/api/v1/people/bulk_match", payload)
         matches = data.get("matches", [])
 
         enriched = []
