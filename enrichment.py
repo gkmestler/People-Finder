@@ -197,7 +197,8 @@ def run_enrichment(
             progress("phone_reveal", f"Requesting phone numbers for {len(person_ids)} contacts...", 88)
 
             job = phone_store.create_job(person_ids, timeout=60.0)
-            webhook_url = f"{webhook_base_url.rstrip('/')}/api/webhook/phone?job_id={job.job_id}"
+            webhook_url = f"{webhook_base_url.rstrip('/')}/api/webhook/phone/{job.job_id}"
+            logger.info(f"Phone reveal webhook URL: {webhook_url}")
 
             # Fire off phone reveal requests one at a time
             for i, pid in enumerate(person_ids):

@@ -112,13 +112,9 @@ def auth_status():
 
 # --- Webhook routes ---
 
-@app.route("/api/webhook/phone", methods=["POST"])
-def webhook_phone():
+@app.route("/api/webhook/phone/<job_id>", methods=["POST"])
+def webhook_phone(job_id):
     """Receive phone number data from Apollo's async phone reveal."""
-    job_id = request.args.get("job_id")
-    if not job_id:
-        return jsonify({"error": "Missing job_id"}), 400
-
     job = phone_store.get_job(job_id)
     if not job:
         logger.warning(f"Phone webhook received for unknown job: {job_id}")
