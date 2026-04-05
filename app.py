@@ -133,17 +133,26 @@ def webhook_phone(job_id):
     if len(_webhook_payloads) > 20:
         _webhook_payloads.pop(0)
 
-    import json as _json
-    logger.info(f"Phone webhook payload ({len(_json.dumps(data))} chars): {_json.dumps(data)[:2000]}")
-
-    person = data.get("person") or data
-    person_id = person.get("id", "")
-
-    if person_id:
-        job.record_phone(person_id, data)  # Store the FULL payload, not just person
-        logger.info(f"Phone webhook: recorded for {person_id}, job has {len(job.results)}/{job.expected} results")
+    # Apollo bulk_match sends ONE webhook with a "people" array (not one per person).
+    # Shape: {"status":"success","people":[{"id":"...","phone_numbers":[...]},...]}
+    people_list = data.get("people") or []
+    if people_list:
+        recorded = 0
+        for person in people_list:
+            pid = person.get("id", "")
+            if pid:
+                job.record_phone(pid, person)
+                recorded += 1
+        logger.info(f"Phone webhook: recorded {recorded} people, job has {len(job.results)}/{job.expected}")
     else:
-        logger.warning(f"Phone webhook: no person_id found. Top keys={list(data.keys())}")
+        # Fallback: single-person payload  {"person": {...}}
+        person = data.get("person") or data
+        pid = person.get("id", "")
+        if pid:
+            job.record_phone(pid, person)
+            logger.info(f"Phone webhook (single): recorded {pid}, job has {len(job.results)}/{job.expected}")
+        else:
+            logger.warning(f"Phone webhook: no person data found. Top keys={list(data.keys())}")
 
     return jsonify({"status": "ok"}), 200
 
