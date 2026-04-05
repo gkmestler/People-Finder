@@ -18,10 +18,16 @@ class ApolloClient:
             "X-Api-Key": api_key,
         }
 
-    def _post(self, endpoint: str, payload: dict) -> dict:
+    def _post(self, endpoint: str, payload: dict, query_params: dict | None = None) -> dict:
         """POST to Apollo REST API using API key auth."""
         payload["api_key"] = self.api_key
-        resp = requests.post(f"{API_BASE}{endpoint}", json=payload, headers=self.headers, timeout=30)
+        resp = requests.post(
+            f"{API_BASE}{endpoint}",
+            json=payload,
+            headers=self.headers,
+            params=query_params,
+            timeout=30,
+        )
         if not resp.ok:
             try:
                 detail = resp.json()
@@ -37,7 +43,7 @@ class ApolloClient:
         page: int,
         per_page: int,
     ) -> dict:
-        """People API Search (master API key). Query params per Apollo docs — not mixed_people/search."""
+        """People API Search (master API key). Query params per Apollo docs."""
         url = f"{API_BASE}/api/v1/mixed_people/api_search"
         params: list[tuple[str, str | int]] = []
         for oid in organization_ids:
@@ -73,7 +79,7 @@ class ApolloClient:
         }
 
     def search_organizations(self, company_name: str) -> list[dict]:
-        """Search Apollo for an organization by name. Returns list of org matches."""
+        """Search Apollo for an organization by name."""
         data = self._post("/api/v1/mixed_companies/search", {
             "q_organization_name": company_name,
             "page": 1,
@@ -101,7 +107,7 @@ class ApolloClient:
         page: int = 1,
         per_page: int = 25,
     ) -> dict:
-        """Search people at orgs by title via People API Search (mixed_people/api_search)."""
+        """Search people at orgs by title via People API Search."""
         per = max(1, min(int(per_page), 100))
         data = self._people_api_search(organization_ids, titles, page, per)
         people_raw = data.get("people", []) or []
@@ -139,8 +145,33 @@ class ApolloClient:
 
         return all_people
 
-    def bulk_enrich(self, people: list[dict]) -> list[dict]:
-        """Enrich up to 10 people. Returns enriched data with key fields only."""
+    @staticmethod
+    def _extract_enriched(m: dict) -> dict:
+        """Normalize one match from bulk_match into our contact shape."""
+        return {
+            "_person_id": m.get("id", ""),
+            "first_name": m.get("first_name", ""),
+            "last_name": m.get("last_name", ""),
+            "title": m.get("title", ""),
+            "email": m.get("email"),
+            "email_status": m.get("email_status", ""),
+            "linkedin_url": m.get("linkedin_url", ""),
+            "organization_name": (m.get("organization") or {}).get("name", ""),
+            "phone_number": "",
+        }
+
+    def bulk_enrich(
+        self,
+        people: list[dict],
+        reveal_phone: bool = False,
+        webhook_url: str | None = None,
+    ) -> list[dict]:
+        """Enrich up to 10 people via /api/v1/people/bulk_match.
+
+        When reveal_phone=True and webhook_url is set, Apollo sends phone data
+        asynchronously to the webhook.  The synchronous response still contains
+        demographic + firmographic data (name, title, email, linkedin, org).
+        """
         details = []
         for p in people[:10]:
             entry = {}
@@ -154,35 +185,21 @@ class ApolloClient:
                 entry["linkedin_url"] = p["linkedin_url"]
             details.append(entry)
 
-        data = self._post("/api/v1/people/bulk_match", {"details": details})
+        qp: dict[str, str] = {}
+        if reveal_phone and webhook_url:
+            qp["reveal_phone_number"] = "true"
+            qp["webhook_url"] = webhook_url
+
+        data = self._post("/api/v1/people/bulk_match", {"details": details}, query_params=qp or None)
         matches = data.get("matches", [])
 
         enriched = []
         for m in matches:
             if not m:
                 continue
-            enriched.append({
-                "_person_id": m.get("id", ""),
-                "first_name": m.get("first_name", ""),
-                "last_name": m.get("last_name", ""),
-                "title": m.get("title", ""),
-                "email": m.get("email"),
-                "email_status": m.get("email_status", ""),
-                "linkedin_url": m.get("linkedin_url", ""),
-                "organization_name": (m.get("organization") or {}).get("name", ""),
-                "phone_number": "",
-            })
+            enriched.append(self._extract_enriched(m))
 
         return enriched
-
-    def reveal_phone(self, person_id: str, webhook_url: str) -> dict:
-        """Request phone number reveal for a single person via webhook."""
-        payload = {
-            "id": person_id,
-            "reveal_phone_number": True,
-            "webhook_url": webhook_url,
-        }
-        return self._post("/api/v1/people/match", payload)
 
     def enrich_all(self, people: list[dict], delay: float = 1.0) -> list[dict]:
         """Enrich a list of people in batches of 10. Returns all enriched results."""

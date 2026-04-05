@@ -1,11 +1,11 @@
-"""Verify the app matches the intended workflow (companies → titles + Claude expand → min/max → preview → enrich)."""
+"""Verify the app matches the intended workflow (companies → titles + Claude expand → max → preview → enrich)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
 from apollo_client import ApolloClient
-from enrichment import run_enrichment, preview_people_fields
+from enrichment import run_enrichment, _extract_phone
 
 
 @pytest.fixture
@@ -17,15 +17,14 @@ def flask_client():
         yield c
 
 
-def test_index_ui_has_target_companies_titles_expand_min_max_preview_enrich(flask_client):
-    """UI exposes the full step flow the product describes."""
+def test_index_ui_has_target_companies_titles_expand_max_preview_enrich(flask_client):
+    """UI exposes the full step flow."""
     r = flask_client.get("/")
     assert r.status_code == 200
     html = r.data.decode()
     assert "Target Companies" in html
     assert "Target Titles" in html
     assert "Expand with Claude" in html
-    assert 'id="minPerCompany"' in html
     assert 'id="maxPerCompany"' in html
     assert "Preview" in html
     assert "Enrich All" in html
@@ -34,29 +33,17 @@ def test_index_ui_has_target_companies_titles_expand_min_max_preview_enrich(flas
     assert "/api/enrich" in html
 
 
-def test_preview_payload_includes_min_max_from_frontend_contract():
-    """Document: JS sends min_per_company and max_per_company with preview (see templates/index.html)."""
-    # Static contract check without calling Apollo
-    from pathlib import Path
-
-    tpl = Path(__file__).resolve().parent.parent / "templates" / "index.html"
-    text = tpl.read_text(encoding="utf-8")
-    assert "min_per_company: getMinPerCompany()" in text
-    assert "max_per_company: getMaxPerCompany()" in text
-
-
 def test_enrichment_respects_max_per_company():
     apollo = MagicMock()
     apollo.search_organizations.return_value = [{"id": "org1", "name": "Acme Co"}]
     many = [{"id": f"p{i}", "first_name": "A", "last_name": str(i), "title": "VP"} for i in range(20)]
     apollo.search_all_people.return_value = many
-    apollo.bulk_enrich.side_effect = lambda batch: batch
+    apollo.bulk_enrich.side_effect = lambda batch, **kw: batch
 
     out = run_enrichment(
         apollo,
         ["Acme"],
         ["VP"],
-        min_per_company=1,
         max_per_company=3,
         on_progress=None,
     )
@@ -66,76 +53,9 @@ def test_enrichment_respects_max_per_company():
     assert len(out["contacts"]) == 3
 
 
-def test_api_preview_respects_min_per_company(flask_client):
-    import app as app_module
-
-    apollo = MagicMock()
-    apollo.search_organizations.return_value = [{"id": "1", "name": "Acme"}]
-    apollo.search_people.return_value = {"total": 3, "people": []}
-
-    with patch.object(app_module, "get_apollo_client", return_value=apollo):
-        r = flask_client.post(
-            "/api/preview",
-            json={
-                "companies": ["Acme"],
-                "titles": ["VP"],
-                "min_per_company": 5,
-                "max_per_company": 50,
-            },
-        )
-    assert r.status_code == 200
-    data = r.get_json()
-    assert data["total_people"] == 0
-    assert data["estimated_credits"] == 0
-    row = data["results"][0]
-    assert row["skipped_below_min"] is True
-    assert row["people_count"] == 0
-
-
-def test_preview_people_fields_matches_enrich_cap_and_min():
-    assert preview_people_fields(100, 1, 50) == {
-        "people_count_raw": 100,
-        "people_count_capped": 50,
-        "people_count": 50,
-        "skipped_below_min": False,
-    }
-    assert preview_people_fields(3, 5, 50) == {
-        "people_count_raw": 3,
-        "people_count_capped": 3,
-        "people_count": 0,
-        "skipped_below_min": True,
-    }
-    assert preview_people_fields(8, 8, 50) == {
-        "people_count_raw": 8,
-        "people_count_capped": 8,
-        "people_count": 8,
-        "skipped_below_min": False,
-    }
-
-
-def test_enrichment_skips_company_when_below_min():
-    apollo = MagicMock()
-    apollo.search_organizations.return_value = [{"id": "org1", "name": "Acme Co"}]
-    apollo.search_all_people.return_value = [{"id": "p1", "first_name": "A", "last_name": "1", "title": "VP"}]
-    apollo.bulk_enrich.side_effect = lambda batch: batch
-
-    out = run_enrichment(
-        apollo,
-        ["Acme"],
-        ["VP"],
-        min_per_company=5,
-        max_per_company=50,
-        on_progress=None,
-    )
-
-    assert out["stats"]["people_found"] == 0
-    assert out["contacts"] == []
-    apollo.bulk_enrich.assert_not_called()
-
-
 @patch("apollo_client.requests.post")
 def test_search_people_uses_mixed_people_api_search(mock_post):
-    """People search must hit api_search (API key), not mixed_people/search (often API_INACCESSIBLE)."""
+    """People search must hit api_search, not mixed_people/search."""
     mock_resp = MagicMock()
     mock_resp.ok = True
     mock_resp.status_code = 200
@@ -160,3 +80,59 @@ def test_search_people_uses_mixed_people_api_search(mock_post):
     assert ("per_page", 10) in params
     assert out["total"] == 12
     assert out["people"][0]["organization_name"] == "Acme"
+
+
+@patch("apollo_client.requests.post")
+def test_bulk_enrich_sends_reveal_phone_and_webhook(mock_post):
+    """When reveal_phone=True, bulk_match must include query params."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {
+        "matches": [{"id": "p1", "first_name": "A", "last_name": "B", "title": "CEO", "email": "a@b.com"}],
+    }
+    mock_post.return_value = mock_resp
+
+    client = ApolloClient("test-key")
+    result = client.bulk_enrich(
+        [{"id": "p1", "first_name": "A"}],
+        reveal_phone=True,
+        webhook_url="https://example.com/webhook/phone/abc123",
+    )
+
+    mock_post.assert_called_once()
+    kw = mock_post.call_args[1]
+    assert kw["params"]["reveal_phone_number"] == "true"
+    assert "example.com" in kw["params"]["webhook_url"]
+    assert len(result) == 1
+    assert result[0]["_person_id"] == "p1"
+    assert result[0]["phone_number"] == ""
+
+
+@patch("apollo_client.requests.post")
+def test_bulk_enrich_no_phone_params_by_default(mock_post):
+    """Without reveal_phone, no phone query params should be sent."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {"matches": []}
+    mock_post.return_value = mock_resp
+
+    client = ApolloClient("test-key")
+    client.bulk_enrich([{"id": "p1"}])
+
+    kw = mock_post.call_args[1]
+    assert kw.get("params") is None
+
+
+def test_extract_phone_from_phone_numbers_array():
+    data = {"person": {"id": "1", "phone_numbers": [{"sanitized_number": "+15551234567"}]}}
+    assert _extract_phone(data) == "+15551234567"
+
+
+def test_extract_phone_from_direct_field():
+    data = {"person": {"id": "1", "sanitized_phone": "+15559876543"}}
+    assert _extract_phone(data) == "+15559876543"
+
+
+def test_extract_phone_empty_when_no_phone():
+    data = {"person": {"id": "1", "first_name": "Bob"}}
+    assert _extract_phone(data) == ""

@@ -129,15 +129,12 @@ def webhook_phone(job_id):
 
     data = request.json or {}
 
-    # Store full payload for debugging
     _webhook_payloads.append(data)
     if len(_webhook_payloads) > 20:
         _webhook_payloads.pop(0)
 
-    # Log the FULL payload (truncated) so we can see everything Apollo sends
     import json as _json
-    payload_str = _json.dumps(data)
-    logger.info(f"Phone webhook FULL PAYLOAD ({len(payload_str)} chars): {payload_str[:2000]}")
+    logger.info(f"Phone webhook payload ({len(_json.dumps(data))} chars): {_json.dumps(data)[:2000]}")
 
     person = data.get("person") or data
     person_id = person.get("id", "")
@@ -256,7 +253,16 @@ def api_enrich():
         return jsonify({"error": str(e)}), 500
 
     include_phone = bool(data.get("include_phone", False))
-    webhook_base_url = get_webhook_base_url() if include_phone else None
+    webhook_base_url = None
+    if include_phone:
+        webhook_base_url = get_webhook_base_url()
+        if not webhook_base_url or "localhost" in webhook_base_url:
+            env_hint = (os.getenv("WEBHOOK_BASE_URL") or "").strip()
+            if not env_hint:
+                return jsonify({
+                    "error": "Phone reveal requires a public webhook URL. "
+                             "Set WEBHOOK_BASE_URL (e.g. https://people-finder-production-36bb.up.railway.app) in .env or environment."
+                }), 400
 
     try:
         result = run_enrichment(
