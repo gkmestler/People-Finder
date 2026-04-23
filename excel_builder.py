@@ -24,17 +24,20 @@ THIN_BORDER = Border(
 
 HEADERS = ["Company", "First Name", "Last Name", "Title", "Email", "Email Status", "LinkedIn URL"]
 HEADERS_WITH_PHONE = ["Company", "First Name", "Last Name", "Title", "Phone", "Email", "Email Status", "LinkedIn URL"]
+HEADERS_SEARCH_ONLY = ["Company", "First Name", "Last Name", "Title", "LinkedIn URL"]
 COL_WIDTHS = [35, 15, 20, 45, 40, 15, 55]
 COL_WIDTHS_WITH_PHONE = [35, 15, 20, 45, 20, 40, 15, 55]
+COL_WIDTHS_SEARCH_ONLY = [35, 15, 20, 45, 55]
 
 
-def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str | None = None, include_phone: bool = False) -> str | io.BytesIO:
+def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: str | None = None, include_phone: bool = False, search_only: bool = False) -> str | io.BytesIO:
     """Build a formatted Excel spreadsheet from enrichment results.
 
     Args:
         contacts: list of enriched contact dicts
         no_results: list of company names with no Apollo results
         output_path: file path to save the .xlsx, or None to return a BytesIO object
+        search_only: if True, only include name/title/company/LinkedIn (no email/phone)
 
     Returns:
         output_path if saving to disk, or BytesIO object if output_path is None
@@ -43,8 +46,15 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
     ws = wb.active
     ws.title = "Contacts"
 
-    headers = HEADERS_WITH_PHONE if include_phone else HEADERS
-    col_widths = COL_WIDTHS_WITH_PHONE if include_phone else COL_WIDTHS
+    if search_only:
+        headers = HEADERS_SEARCH_ONLY
+        col_widths = COL_WIDTHS_SEARCH_ONLY
+    elif include_phone:
+        headers = HEADERS_WITH_PHONE
+        col_widths = COL_WIDTHS_WITH_PHONE
+    else:
+        headers = HEADERS
+        col_widths = COL_WIDTHS
 
     # --- Headers ---
     for col, (header, width) in enumerate(zip(headers, col_widths), 1):
@@ -64,29 +74,39 @@ def build_spreadsheet(contacts: list[dict], no_results: list[str], output_path: 
 
     # --- Data rows ---
     for i, contact in enumerate(contacts_sorted, 2):
-        row_data = [
-            contact.get("organization_name", ""),
-            contact.get("first_name", ""),
-            contact.get("last_name", ""),
-            contact.get("title", ""),
-        ]
-        if include_phone:
-            row_data.append(contact.get("phone_number") or "")
-        row_data.extend([
-            contact.get("email") or "",
-            contact.get("email_status", ""),
-            contact.get("linkedin_url", ""),
-        ])
-
-        email = contact.get("email")
-        status = contact.get("email_status", "")
-
-        if email and status in ("verified", "extrapolated"):
+        if search_only:
+            row_data = [
+                contact.get("organization_name", ""),
+                contact.get("first_name", ""),
+                contact.get("last_name", ""),
+                contact.get("title", ""),
+                contact.get("linkedin_url", ""),
+            ]
             row_fill = GREEN_FILL
-        elif status == "error":
-            row_fill = PINK_FILL
         else:
-            row_fill = YELLOW_FILL
+            row_data = [
+                contact.get("organization_name", ""),
+                contact.get("first_name", ""),
+                contact.get("last_name", ""),
+                contact.get("title", ""),
+            ]
+            if include_phone:
+                row_data.append(contact.get("phone_number") or "")
+            row_data.extend([
+                contact.get("email") or "",
+                contact.get("email_status", ""),
+                contact.get("linkedin_url", ""),
+            ])
+
+            email = contact.get("email")
+            status = contact.get("email_status", "")
+
+            if email and status in ("verified", "extrapolated"):
+                row_fill = GREEN_FILL
+            elif status == "error":
+                row_fill = PINK_FILL
+            else:
+                row_fill = YELLOW_FILL
 
         for col, val in enumerate(row_data, 1):
             cell = ws.cell(row=i, column=col, value=val)

@@ -81,6 +81,101 @@ def preview_people_fields(
     }
 
 
+def run_search_only(
+    apollo: ApolloClient,
+    companies: list[str],
+    titles: list[str],
+    max_per_company: int = 50,
+    on_progress=None,
+) -> dict:
+    """Search-only pipeline: find names/titles at target companies (no credits used).
+
+    Uses org search + people search only — skips enrichment entirely.
+    """
+
+    def progress(step, msg, pct=None):
+        if on_progress:
+            on_progress(step, msg, pct)
+
+    contacts = []
+    no_results = []
+    org_map = {}
+    total_companies = len(companies)
+
+    # --- Step 1: Search for organizations ---
+    progress("org_search", f"Searching Apollo for {total_companies} companies...", 0)
+
+    for i, company in enumerate(companies):
+        pct = int((i / total_companies) * 40)
+        progress("org_search", f"Searching for: {company}", pct)
+
+        try:
+            orgs = apollo.search_organizations(company)
+        except Exception as e:
+            progress("org_search", f"Error searching {company}: {e}", pct)
+            no_results.append(company)
+            continue
+
+        if not orgs:
+            no_results.append(company)
+            progress("org_search", f"No results for: {company}", pct)
+            continue
+
+        best_org = orgs[0]
+        org_map[company] = best_org
+        progress("org_search", f"Found: {best_org['name']} (ID: {best_org['id']})", pct)
+        time.sleep(0.3)
+
+    progress("org_search", f"Found {len(org_map)} orgs, {len(no_results)} with no results", 40)
+
+    # --- Step 2: Search for people at each org ---
+    progress("people_search", "Searching for matching people...", 40)
+
+    for i, (company, org_info) in enumerate(org_map.items()):
+        pct = 40 + int((i / max(len(org_map), 1)) * 55)
+        progress("people_search", f"Searching people at: {org_info['name']}", pct)
+
+        try:
+            needed_pages = max((max_per_company + 99) // 100, 1)
+            people = apollo.search_all_people(
+                organization_ids=[org_info["id"]],
+                titles=titles,
+                max_pages=min(needed_pages, 5),
+            )
+        except Exception as e:
+            progress("people_search", f"Error searching people at {company}: {e}", pct)
+            continue
+
+        people = people[:max_per_company]
+
+        for p in people:
+            contacts.append({
+                "first_name": p.get("first_name", ""),
+                "last_name": p.get("last_name", ""),
+                "title": p.get("title", ""),
+                "organization_name": org_info["name"],
+                "linkedin_url": p.get("linkedin_url", ""),
+                "_company_input": company,
+            })
+
+        progress("people_search", f"Found {len(people)} people at {org_info['name']}", pct)
+        time.sleep(0.3)
+
+    progress("done", f"Found {len(contacts)} contacts (0 credits used)", 100)
+
+    return {
+        "contacts": contacts,
+        "no_results": no_results,
+        "org_map": {k: v for k, v in org_map.items()},
+        "credits_used": 0,
+        "stats": {
+            "companies_searched": total_companies,
+            "orgs_found": len(org_map),
+            "people_found": len(contacts),
+        },
+    }
+
+
 def run_enrichment(
     apollo: ApolloClient,
     companies: list[str],

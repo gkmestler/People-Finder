@@ -408,10 +408,11 @@
     <!-- Step 4: Preview -->
     <div class="card">
       <h2><span class="step-num">4</span> Preview & Enrich</h2>
-      <p class="subtitle">Preview finds orgs and counts people (free). Enrichment costs 1 credit per person.</p>
+      <p class="subtitle">Preview finds orgs and counts people (free). Name Search exports names/titles (free). Enrichment adds emails (1 credit/person).</p>
 
       <div class="btn-group">
         <button class="btn btn-secondary" id="previewBtn" onclick="runPreview()">Preview</button>
+        <button class="btn btn-primary" id="searchOnlyBtn" onclick="runSearchOnly()" style="background: var(--green);">Name Search (Free)</button>
         <button class="btn btn-primary" id="enrichBtn" onclick="runEnrich()" disabled>Enrich All</button>
       </div>
 
@@ -568,6 +569,62 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Preview';
+      }
+    }
+
+    async function runSearchOnly() {
+      const companies = getCompanies();
+      const titles = getTitles();
+      if (!companies.length) return alert('Enter target companies.');
+      if (!titles.length) return alert('Enter target titles.');
+
+      const btn = document.getElementById('searchOnlyBtn');
+      btn.disabled = true;
+      btn.textContent = 'Searching...';
+
+      document.getElementById('progressSection').classList.remove('hidden');
+      document.getElementById('downloadSection').classList.add('hidden');
+      document.getElementById('progressBar').style.width = '50%';
+      document.getElementById('progressMsg').textContent = 'Searching for names at target companies... (0 credits)';
+
+      try {
+        const resp = await fetch('/api/search-only', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companies, titles, max_per_company: getMaxPerCompany() }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.error || 'Search failed');
+        }
+
+        const blob = await resp.blob();
+        const disposition = resp.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename="?([^"]+)"?/);
+        const filename = match ? match[1] : 'apollo_names.xlsx';
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        document.getElementById('progressSection').classList.add('hidden');
+        document.getElementById('downloadSection').classList.remove('hidden');
+        document.getElementById('downloadSection').querySelector('.stats').innerHTML =
+          '<strong>Done!</strong> Name search complete (0 credits used). File downloaded.';
+        document.getElementById('downloadLink').classList.add('hidden');
+
+      } catch (e) {
+        document.getElementById('progressMsg').textContent = 'Error: ' + e.message;
+        alert('Error: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Name Search (Free)';
       }
     }
 

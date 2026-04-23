@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from apollo_client import ApolloClient
 from claude_client import expand_titles
-from enrichment import run_enrichment
+from enrichment import run_enrichment, run_search_only
 from excel_builder import build_spreadsheet
 from phone_store import phone_store
 import oauth
@@ -244,6 +244,43 @@ def api_preview():
         "total_people": total_people,
         "estimated_credits": total_people,
     })
+
+
+@app.route("/api/search-only", methods=["POST"])
+def api_search_only():
+    """Search for people by name/title only — no enrichment, no credits used."""
+    data = request.json
+    companies = data.get("companies", [])
+    titles = data.get("titles", [])
+
+    if not companies or not titles:
+        return jsonify({"error": "Companies and titles are required"}), 400
+
+    try:
+        apollo = get_apollo_client()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    try:
+        result = run_search_only(
+            apollo, companies, titles,
+            max_per_company=data.get("max_per_company", 50),
+        )
+
+        buf = build_spreadsheet(result["contacts"], result["no_results"], search_only=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"apollo_names_{timestamp}.xlsx"
+
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/enrich", methods=["POST"])
